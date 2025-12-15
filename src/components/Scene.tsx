@@ -6,12 +6,19 @@ import * as THREE from 'three'
 import { Target } from './Target'
 import { Bow } from './Bow'
 import { Arrow } from './Arrow'
+import { calculateArrowPower, calculateDistance, calculateScore } from '../utils/physics'
 
 interface SceneProps {
     setScore: React.Dispatch<React.SetStateAction<number>>
     isAiming: boolean
     setIsAiming: React.Dispatch<React.SetStateAction<boolean>>
+    setCurrentPower: React.Dispatch<React.SetStateAction<number>>
+    setLastSpeed: React.Dispatch<React.SetStateAction<number | null>>
+    isPaused: boolean
 }
+
+
+
 
 function Field() {
     return (
@@ -92,23 +99,29 @@ function Field() {
     )
 }
 
-function GameController({ setScore, isAiming, setIsAiming }: SceneProps) {
+function GameController({ setScore, isAiming, setIsAiming, setCurrentPower, setLastSpeed, isPaused }: SceneProps) {
     const { camera } = useThree()
     const [arrows, setArrows] = useState<{ id: string, position: [number, number, number], velocity: [number, number, number] }[]>([])
     const aimStartTime = useRef<number>(0)
 
     useEffect(() => {
         const handleMouseDown = () => {
+            if (isPaused) return
             setIsAiming(true)
             aimStartTime.current = Date.now()
+            setCurrentPower(0)
+            setLastSpeed(null)
         }
 
         const handleMouseUp = () => {
+            if (isPaused) return
             if (!isAiming) return
             setIsAiming(false)
 
-            const duration = Math.min(Date.now() - aimStartTime.current, 2000)
-            const power = 25 + (duration / 2000) * 25
+            const duration = Date.now() - aimStartTime.current
+            const power = calculateArrowPower(duration)
+            setLastSpeed(power)
+            setCurrentPower(0)
 
             const direction = new THREE.Vector3(0, 0, -1)
             direction.applyQuaternion(camera.quaternion)
@@ -133,9 +146,11 @@ function GameController({ setScore, isAiming, setIsAiming }: SceneProps) {
             window.removeEventListener('mousedown', handleMouseDown)
             window.removeEventListener('mouseup', handleMouseUp)
         }
-    }, [isAiming, setIsAiming, camera, setArrows])
+    }, [isAiming, setIsAiming, camera, setArrows, setCurrentPower, setLastSpeed, isPaused])
 
     useFrame((state) => {
+        if (isPaused) return
+
         const targetEuler = new THREE.Euler(
             state.mouse.y * 0.2,
             -state.mouse.x * 0.5,
@@ -143,23 +158,20 @@ function GameController({ setScore, isAiming, setIsAiming }: SceneProps) {
         )
         camera.quaternion.slerp(new THREE.Quaternion().setFromEuler(targetEuler), 0.2)
         camera.position.set(0, 1.6, 8)
+
+        if (isAiming) {
+            const duration = Date.now() - aimStartTime.current
+            // We can re-use the util, or just minimal logic since we need perf here
+            // Re-using util is fine for one call per frame
+            const p = calculateArrowPower(duration)
+            setCurrentPower(p)
+        }
     })
 
     const handleHit = (pos: THREE.Vector3) => {
         const targetCenter = new THREE.Vector3(0, 1.5, -10)
-        const distance = pos.distanceTo(targetCenter)
-
-        let points = 0
-        if (distance < 0.15) points = 10
-        else if (distance < 0.30) points = 9
-        else if (distance < 0.45) points = 8
-        else if (distance < 0.60) points = 7
-        else if (distance < 0.75) points = 6
-        else if (distance < 0.90) points = 5
-        else if (distance < 1.05) points = 4
-        else if (distance < 1.20) points = 3
-        else if (distance < 1.35) points = 2
-        else if (distance < 1.50) points = 1
+        const distance = calculateDistance(pos, targetCenter)
+        const points = calculateScore(distance)
 
         if (points > 0) {
             setScore(prev => prev + points)
@@ -176,7 +188,7 @@ function GameController({ setScore, isAiming, setIsAiming }: SceneProps) {
                 shadow-mapSize={[2048, 2048]}
             />
 
-            <Physics gravity={[0, -9.8, 0]}>
+            <Physics gravity={[0, -9.8, 0]} isPaused={isPaused}>
                 <Field />
                 <Target position={[0, 1.5, -10]} />
 
